@@ -1,4 +1,4 @@
-# dashing-jira-health
+# dashing-jira-widget
 Jira burn-down widget for dashing
 
 ## Description
