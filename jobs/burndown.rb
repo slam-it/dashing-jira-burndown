@@ -14,7 +14,7 @@ def fetch(uri)
   request = Net::HTTP::Get.new(uri)
   request.basic_auth $USERNAME, $PASSWORD
 
-  Net::HTTP.start(uri.hostname, uri.port) do |http|
+  Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https') do |http|
     JSON.parse(http.request(request).body)
   end
 end
@@ -23,35 +23,40 @@ def date(time)
   Time.at(time.to_i / 1000).to_date
 end
 
-def pointsPerStory(changes, story)
+def pointsPerStory(changesPerDate, story)
   points = 0
-  changes.values.each do |change|
-    if change[0]['key'] == story && !change[0]['statC'].nil?
-      points += change[0]['statC']['newValue'].nil? ? 0 : change[0]['statC']['newValue']
+  changesPerDate.values.each do |changes|
+    changes.each do |change|
+      if change['key'] == story && !change['statC'].nil?
+        points += change['statC']['newValue'].nil? ? 0 : change['statC']['newValue']
+      end
     end
   end
   points
 end
 
-def pointsPerDate(changes, startTime)
+def pointsPerDate(changesPerDate, startTime, endTime)
   pointsPerDate = {}
   points = 0
 
-  changes.each do |change|
-    isBeforeStart = change[0].to_i <= startTime
-    isAdded = !change[1][0]['added'].nil?
-    isDone = !change[1][0]['column'].nil? && !change[1][0]['column']['done'].nil?
-    story = change[1][0]['key']
-    key = (isBeforeStart ? date(startTime) : date(change[0]))
-
+  changesPerDate.each do |changes|
+    isBeforeStart = changes[0].to_i <= startTime
+    key = (isBeforeStart ? date(startTime) : date(changes[0]))
     pointsPerDate[key] = [] unless pointsPerDate.key?(key)
 
-    next unless isAdded || isDone
-    points += ((isDone ? -pointsPerStory(changes, story) : pointsPerStory(changes, story)))
-    isBeforeStart ? pointsPerDate[key][0] = points : pointsPerDate[key] << points
-  end
+    changes[1].each do |change|
+      isAdded = !change['added'].nil?
+      isDone = !change['column'].nil? && !change['column']['done'].nil?
+      story = change['key']
 
-  pointsPerDate[Date.today] = [points] unless pointsPerDate.key?(Date.today)
+      if isAdded || isDone
+        points += ((isDone ? -pointsPerStory(changesPerDate, story) : pointsPerStory(changesPerDate, story)))
+        isBeforeStart ? pointsPerDate[key][0] = points : pointsPerDate[key] << points
+      end
+    end
+  end
+  lastKey = date(endTime) < Date.today ? date(endTime) : Date.today
+  pointsPerDate[lastKey] = [points] unless pointsPerDate.key?(lastKey)
   pointsPerDate
 end
 
@@ -60,10 +65,9 @@ def remainingValues(startDate, endDate, pointsPerDate)
   i = 0
 
   startDate.upto(endDate).each do |date|
-    next unless !date.saturday? && !date.sunday?
     if pointsPerDate.key?(date)
       pointsPerDate[date].each_with_index do |points, index|
-        dataPoints << { label: date.strftime('%-d %b'), x: "#{i}.#{index + 10}", y: points }
+        dataPoints << {label: date.strftime('%-d %b'), x: "#{i}.#{index == 0 ? 0 : index + 10}", y: points}
       end
     end
     i += 1
@@ -72,10 +76,15 @@ def remainingValues(startDate, endDate, pointsPerDate)
 end
 
 def guideline(startDate, endDate, pointsPerDate)
-  labels = startDate.upto(endDate).select { |date| !date.saturday? && !date.sunday? }.map { |date| date.strftime('%-d %b') }
-  points = pointsPerDate[startDate][0].step(0, -(pointsPerDate[startDate][0] / (labels.count - 1))).to_a
-
-  labels.map.with_index { |label, index| { label: label, x: index, y: points[index] } }
+  labels = startDate.upto(endDate).map { |date| date.strftime('%-d %b') }
+  weekdays = (startDate.upto(endDate).reject { |date| date.saturday? || date.sunday? }.count) - 1
+  points = pointsPerDate[startDate][0].step(0, -(pointsPerDate[startDate][0] / weekdays)).to_a
+  startDate.upto(endDate).each.with_index do |date, index|
+    if date.saturday? || date.sunday?
+      points.insert(index, points[index])
+    end
+  end
+  labels.map.with_index { |label, index| {label: label, x: index, y: points[index]} }
 end
 
 SCHEDULER.every '30m', first_in: 0 do |_job|
@@ -83,10 +92,10 @@ SCHEDULER.every '30m', first_in: 0 do |_job|
   burndown = fetch(URI(burndownQuery % activeSprint['id']))
   startDate = date(burndown['startTime'])
   endDate = date(burndown['endTime'])
-  pointsPerDate = pointsPerDate(burndown['changes'], burndown['startTime'])
+  pointsPerDate = pointsPerDate(burndown['changes'], burndown['startTime'], burndown['endTime'])
   remainingValues = remainingValues(startDate, endDate, pointsPerDate)
   guideline = guideline(startDate, endDate, pointsPerDate)
-  data = [{ type: 'line', markerType: 'none', dataPoints: guideline }, { type: 'stepLine', markerType: 'none', dataPoints: remainingValues }]
+  data = [{type: 'line', markerType: 'none', dataPoints: guideline}, {type: 'stepLine', markerType: 'none', dataPoints: remainingValues}]
 
   send_event('burndown', container: 'burndownChart', data: data, title: 'Burndown Chart')
 end

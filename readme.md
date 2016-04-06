@@ -7,6 +7,10 @@ GitHub location: https://github.com/slam-it/dashing-jira-burndown
 
 [Dashing](http://shopify.github.com/dashing) widget to display a [Jira](https://www.atlassian.com/software/jira) (greenhopper) burn-down of the active sprint
 
+Example of a burndown:
+
+![Image](jira-burndown.png?raw=true)
+
 ## Installation
 ##### 1. Import Canvasjs library
 In `dashboards/layout.erb`, add this script tag:
